@@ -1,0 +1,126 @@
+name: Publish Windows catalog
+
+on:
+  workflow_dispatch:
+    inputs:
+      winget_ref:
+        description: winget-pkgs git ref
+        required: false
+        default: master
+        type: string
+      allow_count_reduction:
+        description: Approve an application-count drop below 75 percent of the published catalog
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # Monday 12:00 UTC. GitHub schedules cannot express a rolling 168-hour timer.
+    - cron: "0 12 * * 1"
+
+permissions:
+  contents: read
+
+# One generation and one Pages deployment at a time.
+# A later run waits. It does not cancel a generation that is already in progress.
+concurrency:
+  group: windows-catalog-pages
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - name: Check GitHub Pages without enabling it
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        with:
+          enablement: false
+
+      - name: Checkout catalog repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Checkout winget-pkgs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: microsoft/winget-pkgs
+          ref: ${{ github.event.inputs.winget_ref || 'master' }}
+          path: winget-pkgs
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record upstream commit
+        id: upstream
+        working-directory: winget-pkgs
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12.10"
+
+      - name: Install pinned Python dependencies
+        run: python -m pip install -r tools/windows-catalog-generator/requirements.txt
+
+      - name: Test the generator
+        working-directory: tools/windows-catalog-generator
+        run: python -m pytest
+
+      - name: Generate the Windows catalog
+        working-directory: tools/windows-catalog-generator
+        run: python -m winget_catalog --source "$GITHUB_WORKSPACE/winget-pkgs" --output out --source-commit "${{ steps.upstream.outputs.sha }}" --require-applications
+
+      - name: Download the published catalog metadata
+        id: previous
+        run: |
+          set -euo pipefail
+          url="https://ecolangelo-valleyit.github.io/vits-appmatrix-catalogs/windows/catalog-metadata.json"
+          code="$(curl --silent --show-error --location --output previous-metadata.json --write-out "%{http_code}" "$url" || true)"
+          if [ "$code" = "404" ]; then
+            rm -f previous-metadata.json
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          elif [ "$code" = "200" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Could not read the published catalog metadata (HTTP ${code})." >&2
+            exit 1
+          fi
+
+      - name: Validate and prepare the Pages files
+        env:
+          ALLOW_COUNT_REDUCTION: ${{ github.event.inputs.allow_count_reduction == 'true' }}
+          PREVIOUS_PRESENT: ${{ steps.previous.outputs.present }}
+        run: |
+          set -euo pipefail
+          args=(--generated tools/windows-catalog-generator/out --pages site)
+          if [ "${PREVIOUS_PRESENT}" = "true" ]; then
+            args+=(--previous-metadata previous-metadata.json)
+          fi
+          if [ "${ALLOW_COUNT_REDUCTION}" = "true" ]; then
+            args+=(--allow-count-reduction)
+          fi
+          python scripts/publish_windows_catalog.py "${args[@]}"
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -1,0 +1,8 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+tools/windows-catalog-generator/out/
+site/
+site.windows-staging/
+.site.windows-staging/
+previous-metadata.json
