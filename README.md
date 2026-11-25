@@ -1,5 +1,7 @@
 # VITS AppMatrix catalogs
 
+[![Publish Windows catalog](https://github.com/ecolangelo-valleyit/vits-appmatrix-catalogs/actions/workflows/windows-catalog.yml/badge.svg)](https://github.com/ecolangelo-valleyit/vits-appmatrix-catalogs/actions/workflows/windows-catalog.yml)
+
 This repository generates and publishes the Windows application catalog used by VITS AppMatrix.
 
 The desktop application downloads one HTTPS document. It does not clone `microsoft/winget-pkgs`, and it does not use WinGet, PowerShell, the Microsoft Store, or an administrator account to read the catalog.
